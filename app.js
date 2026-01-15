@@ -111,6 +111,25 @@ function scrollToSection(sectionId) {
             top: targetPosition,
             behavior: 'smooth'
         });
+        
+        // Re-initialize Advanced Popper canvas when navigating to that section
+        if (sectionId === 'advanced') {
+            setTimeout(() => {
+                const canvas = document.getElementById('hypothesisLatticeCanvas');
+                if (canvas) {
+                    const container = canvas.parentElement;
+                    const containerWidth = container.clientWidth;
+                    if (containerWidth > 100) {
+                        canvas.width = containerWidth;
+                        canvas.height = 500;
+                        if (typeof calculateNodePositions === 'function') {
+                            calculateNodePositions(canvas);
+                            drawPopperLattice(canvas);
+                        }
+                    }
+                }
+            }, 400);
+        }
     }
 }
 
@@ -1955,31 +1974,63 @@ function initializeAdvancedPopper() {
     const canvas = document.getElementById('hypothesisLatticeCanvas');
     if (!canvas) return;
     
-    // Set canvas size
+    // Skip if already initialized with valid dimensions
+    if (canvas.dataset.initialized === 'true' && canvas.width > 100) return;
+    
+    // Set canvas size - use fixed width if container is hidden
     const container = canvas.parentElement;
-    canvas.width = container.clientWidth || 800;
+    const containerWidth = container.clientWidth;
+    canvas.width = containerWidth > 100 ? containerWidth : 800;
     canvas.height = 500;
     
     // Initialize node positions
     calculateNodePositions(canvas);
     
     // Draw initial state
-    drawLattice(canvas);
+    drawPopperLattice(canvas);
     
-    // Setup speed slider
+    // Mark as initialized
+    canvas.dataset.initialized = 'true';
+    
+    // Setup speed slider (only once)
     const speedSlider = document.getElementById('simSpeedSlider');
-    if (speedSlider) {
+    if (speedSlider && !speedSlider.dataset.initialized) {
         speedSlider.addEventListener('input', (e) => {
             document.getElementById('speedLabel').textContent = e.target.value + 'ms';
         });
+        speedSlider.dataset.initialized = 'true';
     }
     
-    // Setup optimization toggles
+    // Setup optimization toggles (only once)
     document.querySelectorAll('.toggle-item input').forEach(input => {
-        input.addEventListener('change', () => {
-            input.closest('.toggle-item').classList.toggle('active', input.checked);
-        });
+        if (!input.dataset.initialized) {
+            input.addEventListener('change', () => {
+                input.closest('.toggle-item').classList.toggle('active', input.checked);
+            });
+            input.dataset.initialized = 'true';
+        }
     });
+    
+    // Setup intersection observer to re-initialize when section becomes visible
+    const section = document.getElementById('advanced');
+    if (section && !section.dataset.observerSet) {
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    // Re-initialize when section becomes visible
+                    const newWidth = container.clientWidth;
+                    if (newWidth > 100 && (canvas.width < 100 || canvas.dataset.initialized !== 'true')) {
+                        canvas.width = newWidth;
+                        calculateNodePositions(canvas);
+                        drawPopperLattice(canvas);
+                        canvas.dataset.initialized = 'true';
+                    }
+                }
+            });
+        }, { threshold: 0.1 });
+        observer.observe(section);
+        section.dataset.observerSet = 'true';
+    }
 }
 
 function calculateNodePositions(canvas) {
@@ -2019,18 +2070,18 @@ function calculateNodePositions(canvas) {
     })).filter(e => e.from && e.to);
 }
 
-function drawLattice(canvas) {
+function drawPopperLattice(canvas) {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
     // Draw edges first
     PopperSimState.edges.forEach(edge => {
-        drawEdge(ctx, edge);
+        drawPopperEdge(ctx, edge);
     });
     
     // Draw nodes
     PopperSimState.nodes.forEach(node => {
-        drawNode(ctx, node);
+        drawPopperNode(ctx, node);
     });
     
     // Draw level labels
@@ -2046,7 +2097,7 @@ function drawLattice(canvas) {
     });
 }
 
-function drawEdge(ctx, edge) {
+function drawPopperEdge(ctx, edge) {
     const { from, to } = edge;
     
     ctx.beginPath();
@@ -2070,7 +2121,7 @@ function drawEdge(ctx, edge) {
     ctx.setLineDash([]);
 }
 
-function drawNode(ctx, node) {
+function drawPopperNode(ctx, node) {
     const { x, y, radius, status } = node;
     
     // Node colors based on status
@@ -2154,7 +2205,7 @@ function advancedSimStep() {
         addLogEntry('reducer', `REDUCER: Pruned H${nodeId} - rule contains implied literal`);
         document.getElementById('reducerStat').textContent = PopperSimState.stats.prunedReducer + ' pruned';
         updateStats();
-        drawLattice(canvas);
+        drawPopperLattice(canvas);
         // Move to next
         PopperSimState.stats.hypothesesTested++;
         return;
@@ -2169,7 +2220,7 @@ function advancedSimStep() {
         addLogEntry('symmetry', `SYMMETRY: Pruned H${nodeId} - body-variant of earlier hypothesis`);
         document.getElementById('symmetryStat').textContent = PopperSimState.stats.prunedSymmetry + ' pruned';
         updateStats();
-        drawLattice(canvas);
+        drawPopperLattice(canvas);
         // Move to next
         PopperSimState.stats.hypothesesTested++;
         return;
@@ -2188,7 +2239,7 @@ function advancedSimStep() {
         evaluateHypothesis(canvas, node, hyp);
     }, 200);
     
-    drawLattice(canvas);
+    drawPopperLattice(canvas);
     updateStats();
 }
 
@@ -2265,7 +2316,7 @@ function evaluateHypothesis(canvas, node, hyp) {
         addLogEntry('constraint', `H${node.id}: Too specific → Generalization constraint`);
     }
     
-    drawLattice(canvas);
+    drawPopperLattice(canvas);
     updateStats();
 }
 
@@ -2450,14 +2501,17 @@ function advancedSimReset() {
     // Redraw
     const canvas = document.getElementById('hypothesisLatticeCanvas');
     if (canvas) {
-        drawLattice(canvas);
+        drawPopperLattice(canvas);
     }
     updateStats();
 }
 
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', () => {
+    // Initial attempt after 600ms
     setTimeout(initializeAdvancedPopper, 600);
+    // Retry after 1500ms in case first attempt failed due to layout
+    setTimeout(initializeAdvancedPopper, 1500);
 });
 
 // Export functions
